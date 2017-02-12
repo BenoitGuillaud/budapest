@@ -312,10 +312,15 @@ hist(sales$ppsm, n=100)
 ```
 
 ## Make predictions
-
-
 ### SVM with Caret package
 #### pre-process the data
+```{r}
+# select the features of interest
+sales.c1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
+```
+
+
+
 
 ### Linear regression with GLM and LM
 In this section, we run a linear regression on the dataset using the Generalized Linear Model implementation in R.
