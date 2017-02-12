@@ -193,6 +193,10 @@ sales <- within(sales, {
   })
 ```
 
+No need to recode the variables:
+  - aircon
+  - xxx
+  
 Here's a summary of the cleaned data:
 ```{r}
 sales <- droplevels(sales)
@@ -308,6 +312,11 @@ hist(sales$ppsm, n=100)
 ```
 
 ## Make predictions
+
+
+### SVM with Caret package
+#### pre-process the data
+
 ### Linear regression with GLM and LM
 In this section, we run a linear regression on the dataset using the Generalized Linear Model implementation in R.
 #### First analysis: price ~ 5 independent variables
