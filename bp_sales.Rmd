@@ -1,0 +1,565 @@
+---
+title: "An Analysis of Budapest Property Market"
+author: "Benoît Guillaud"
+date: "2 Dezember 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("dplyr")
+library("corrgram")
+#library("vcd")
+#library("caTools")
+#library("psych")
+library("rpart") # implements CART (regression trees)
+library("rpart.plot")
+library("caret")
+library("ggplot2")
+
+```
+
+## Present and prepare the data
+### Origin of the data
+The dataset analysed was scraped from www.ingatlan.com, a popular platform in Hungary for property listings, using a Python code based on the library BeautifulSoup.
+
+The following assumptions are made when carrying out the search:
+ - Limit the search to 3 inner-city districts (V. VI. and VII. kerület)
+ - Limit the search to brickwork building (the vast majority in these districts) 
+ - Set "tenancy for sale" = NO, as I don't understand it 
+
+The resulting search url is: 
+http://ingatlan.com/listar/elado+lakas+nem-berleti-jog+tegla-epitesu-lakas+budapest+v-vi-vii-ker 
+
+### Features
+The following features are extracted frome the listings:
+
+| Feature   | Description                                 | Type    |
+|-----------|---------------------------------------------|---------|
+| listing   | Number of the listing                       | ID      |
+| price     | Asking price in million Forint (HUF)        | Float   |
+| area      | Flat floor area (mezzanine NOT included)    | Integer |
+| rooms     | Number of rooms                             | String  |
+| fullrooms | Number of full rooms                        | Integer |
+| halfrooms | Number of half rooms                        | Integer |
+| district  | District wehre the property is located      | String  |
+| varos     | Administrative division inside the district | String  |
+| condition | Condition of the property                   | String  |
+| floor     | Floor (0={földszint,fél} -1={underground})  | Integer |
+| storeys   | Number of storeys in the building           | Integer |
+| lift      | Presence of an elevator                     | Boolean |
+| heating   | Type of heating                             | String  |
+| view      | Opening to the street or internal yard etc. | String  |
+| lat       | Latitude of the property                    | Float   |
+| long      | Longitude of the property                   | Float   |
+| orient    | Orientation of the windows                  | String  |
+| parking   | Options for parking, if any                 | String  |
+| balcony   | Whether there is a balcony or not           | Boolean |
+| aircon    | Whether these is air conditioning           | Boolean |
+| ceiling   | Ceiling height                              | Boolean |
+| utility   | Utility level as classified by ingatlan.com | String  |
+| bathtoil  | Whether bathroom and toilets are together   | String  |
+| garcess   | Whether there is garden access              | Boolean |
+
+Features not collected include the street, as they usually span across long distances in Budapest.
+
+* It may be interesting to list  here for each feature the possible values *
+
+### Load the data
+```{r}
+sales <- read.csv("extraction v4 - 2016-12-04.txt", fileEncoding="UTF-8-BOM", header=TRUE, sep=";")
+dim(sales)
+str(sales)
+```
+
+### Clean the data
+Set the listing number (first column) as the case identifier (i.e. row name) and then delete it from the dataset:
+```{r}
+rownames(sales) <- sales$listing
+sales <- dplyr::select(sales,-listing)
+```
+
+We want to remove duplicates in the data (redundant listings exists because some properties are uploaded several times by various agencies):
+```{r}
+# find duplicates against features selected simultaneously
+feat <- c(2,3,4,7,10,15,16) # price, area, rooms, district, floor, lat, long
+dupl <- duplicated(sales[,feat])
+# count the number of duplicates "TRUE"
+table(dupl)
+# keep only the unique rows
+sales = subset(sales,!dupl)
+dim(sales)
+```
+
+Remove some spurious data in the set (other districts):
+```{r}
+sales <- dplyr::filter(sales, district=='5. ker'|district=='6. ker'|district=='7. ker')
+```
+
+Clean the "nincs megadva" from the data (replace by NA):
+```{r}
+sales <- within(sales, {
+  condition[condition == "nincs megadva"] <- NA
+  lift[lift == "nincs megadva"] <- NA
+  heating[heating == "nincs megadva"] <- NA
+  view[view == "nincs megadva"] <- NA
+  orient[orient == "nincs megadva"] <- NA
+  floor[floor == "nincs megadva"] <- NA
+  storeys[storeys == "nincs megadva"] <- NA
+  parking[parking == "nincs megadva"] <- NA
+  aircon[aircon == "nincs megadva"] <- NA
+  ceiling[ceiling == "nincs megadva"] <- NA
+  utility[utility == "nincs megadva"] <- NA
+  bathtoil[bathtoil == "nincs megadva"] <- NA
+  garcess[garcess == "nincs megadva"] <- NA
+  })
+```
+
+Recode the categories of the factor variable "varos":
+```{r}
+table(sales$varos)
+sales <- within(sales, {
+  # using simple assignments
+  varos[varos == ""] <- NA
+  varos[varos == "Terézváros"] <- NA
+  varos[varos == "Erzsébetváros"] <- NA
+  })
+```
+
+Recode the categories of the factor variable "condition":
+```{r}
+table(sales$condition)
+sales$condition <- dplyr::recode(sales$condition,
+                        "építés alatt" = NA_character_,
+                        "beköltözheto" = NA_character_,
+                        default=NULL,
+                        missing=NULL)
+summary(sales$condition)
+```
+
+Recode the categories of the variable "floor":
+```{r}
+typeof(sales$floor)
+table(sales$floor)
+
+sales$floor <- dplyr::recode(sales$floor,
+                             "szuterén" = NA_character_,
+                             "5" = "5+",
+                             "6" = "5+",
+                             "7" = "5+",
+                             "8" = "5+",
+                             "9" = "5+",
+                             "10 felett" = "5+",
+                             default=NULL,
+                             missing=NULL)
+table(sales$floor)
+```
+
+Recode the categories of the variable "heating":
+```{r}
+table(sales$heating)
+sales$heating <- dplyr::recode(sales$heating,
+                             "cserépkályha" = "Other",
+                             "egyéb" = "Other",
+                             "fan-coil" = "Other",
+                             "gázkazán" = "Other",
+                             "geotermikus" = "Other",
+                             "távfutés" = "Other",
+                             "távfutés egyedi méréssel" = "Other",
+                             default=NULL,
+                             missing=NULL)
+table(sales$heating)
+```
+
+Recode the categories of the variable "orient":
+```{r}
+table(sales$orient)
+sales$orient <- dplyr::recode(sales$orient,
+                             "délkelet" = "dél",
+                             "délnyugat" = "dél",
+                             "északkelet" = "észak",
+                             "északnyugat" = "észak",
+                             default=NULL,
+                             missing=NULL)
+table(sales$orient)
+```
+
+Recode the categories of the variable "utility":
+```{r}
+table(sales$utility)
+sales <- within(sales, {
+  utility[utility == "félkomfortos"] <- NA
+  utility[utility == "komfort nélküli"] <- NA
+  })
+```
+
+Here's a summary of the cleaned data:
+```{r}
+sales <- droplevels(sales)
+str(sales)
+summary(sales)
+```
+
+
+## Explore the data
+### Summary information
+In this section, we create additional variables with mutate() and then use group_by() and summarise() from the dplyr package to take a first look at the data. In particular, the group_by() function is used to generate summary statistics from the data frame within strata defined by a variable.
+
+Let's creating a new variables, the price per square meter:
+```{r}
+sales <- dplyr::mutate(sales, ppsm = price/area)
+```
+
+Let's look at the variations per location:
+```{r}
+# create a separate data frame that splits the original data frame by district/varos
+locations <- dplyr::group_by(sales, district, varos)
+
+dplyr::summarise(locations, 
+                 total.count = n(),
+                 avg.price = round(mean(price, na.rm=TRUE), 1),                 
+                 median.price = round(median(price, na.rm=TRUE), 1),
+                 avg.area = round(mean(area, na.rm=TRUE), 1),
+                 median.area = round(median(area, na.rm=TRUE), 1),
+                 avg.ppsm = mean(ppsm, na.rm=TRUE)*1000,
+                 median.ppsm = median(ppsm, na.rm=TRUE)*1000)
+```
+
+Let's look at the variations with floor:
+```{r}
+floors <- dplyr::group_by(sales, floor, district=="5.ker")
+dplyr::summarise(floors,
+                 total.count = n(),
+                 median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
+```
+
+Let's look at the variations with heating system:
+```{r}
+heatings <- dplyr::group_by(sales, heating)
+dplyr::summarise(heatings,
+                 total.count = n(),
+                 median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
+```
+Looking at the heating systems is already interesting since I can spot potential confounders. For instance, the data here suggests that "házközponti" leads to the highest price per square meter. In reality, it is due to the fact that the building central heating is mainly present in the old buildings of the very centre.
+
+Let's look at the variations with "view":
+```{r}
+views <- dplyr::group_by(sales, view)
+dplyr::summarise(views,
+                 total.count = n(),
+                 median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
+```
+
+Let's look at the variations with "balcony":
+```{r}
+# group the continuous vcariable with custom bins
+data.frame(dataset, bin=cut(dataset, c(1,4,9,17,23), include.lowest=TRUE))
+
+balconys <- dplyr::group_by(sales, cut(balcony, seq.int(0,max(balcony, na.rm = TRUE), by=5)))
+dplyr::summarise(balconys,
+                 total.count = n(),
+                 median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
+```
+
+### Identify confounders
+I found a good summary of my thoughts on the topic at https://www.researchgate.net/post/How_do_I_find_confounding_variables:
+
+"Whether you should check for confounding depends on the purpose of your model. Is it purely to predict the probability of an event? Or is it to test the hypothesis that a particular factor/variable causes outcome? So, if you are interested in testing causal relationships, then you must check for confounding. If your model is only for prediction, then checking is not important."
+
+Let try techniques  on the continuous variables:
+```{r}
+sales.cont <- dplyr::select(sales, price:halfrooms, balcony:ppsm)
+
+# covariances
+cov(sales.cont)
+
+# correlation coefficients [see also "R in Action"]
+cor(sales.cont, y=NULL, use="pairwise.complete.obs", method=c("pearson","kendall","spearman"))
+
+# testing correlations for significance
+cor.test(sales.cont$price,sales.cont$balcony, alternative="two.side", method="pearson")
+
+# visualize correlations with a correlogram
+corrgram::corrgram(sales.cont,
+                   order=FALSE,
+                   lower.panel = panel.pie,
+                   upper.panel = panel.pts,
+                   text.panel = panel.txt,
+                   main = "Correlogram of continuous variables")
+
+# vizualise the relationships among numeric features using a scatterplot matrix
+#psych::pairs.panels(sales.cont)
+```
+
+Let's now use mosaic plots to look at the categorical variables:
+```{r}
+str(sales)
+sales.cat <- dplyr::select(sales, district:orient)
+#sales.catt <- table(sales.cat)
+#head(sales.catt)
+#vcd::mosaic(sales.catt)
+```
+
+The dependent variable is "price". Although linear regression does not strictly require a normally distributed dependent variable, the model often fits better when this is true [see also Machine Learning with R, 2nd Edition]
+```{r}
+hist(sales$price[sales$price<100])
+hist(sales$price, n=100)
+hist(sales$ppsm, n=100)
+```
+
+## Make predictions
+### Linear regression with GLM and LM
+In this section, we run a linear regression on the dataset using the Generalized Linear Model implementation in R.
+#### First analysis: price ~ 5 independent variables
+```{r}
+# select only the features of interest for the fist analysis
+sales.1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+split <- caTools::sample.split(sales.1$price, SplitRatio = 0.7) 
+
+# Split up the data using subset
+trainingSet <- subset(sales.1, split==TRUE)
+testingSet <- subset(sales.1, split==FALSE)
+
+# Regression model on training set
+price.model.glm = glm(price ~ ., data=trainingSet)
+
+summary(price.model.glm)
+
+# Prediction on testing set
+predict.gml.price = predict(price.model.glm, newdata=testingSet)
+
+# Calculate error on testing set
+errTest = (predict.gml.price - testingSet$price)/testingSet$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-500:300, n=50))
+
+Fn = ecdf(errTest)
+plot(Fn)
+```
+The model performs poorly, with a mean error of 3.6%, a standard deviation of 42.8%, residual deviance of 14'196'708 and AIC of 58'187.
+
+#### Second analysis: ppsm ~ 5 independent variables
+```{r}
+# select only the features of interest for the fist analysis
+sales.2 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
+
+# Split up the data using subset
+trainingSet <- subset(sales.2, split==TRUE)
+testingSet <- subset(sales.2, split==FALSE)
+
+# Regression model on training set
+ppsm.model.glm <- glm(ppsm ~ ., data=trainingSet)
+
+summary(ppsm.model.glm)
+
+# Prediction on testing set
+predict.gml.ppsm = predict(ppsm.model.glm, newdata=testingSet)
+
+# Calculate error on testing set
+errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-60:200, n=50))
+
+Fn = ecdf(errTest)
+plot(Fn)
+```
+The model performs better than with price, with a mean error of 5.6%, a standard deviation of 25.0%, residual deviance of 330 and AIC of -1030.
+
+It is interesting to note that the residual deviance and AIC are terrible if ppsm is defined as price/area * 1000. Do I need to scale all my variables?
+
+
+Now, let reduce the testing set to 30m2 < area < 100m2 and plot again the histogram, to see how well the model is performing in this range.
+```{r}
+# filter the testing set
+testingSet <- dplyr::filter(testingSet, area >=30 & area <= 100)
+
+# Prediction on testing set
+predict.gml.ppsm = predict(ppsm.model.glm, newdata=testingSet)
+
+# Calculate error on testing set
+errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-60:200, n=50))
+```
+Predictions in the region 30m2 < area < 100m2 are not much better. A neat way to look at the result would be have bins for area, and show for each bin the mean error and its standard deviation.
+
+
+#### Third analysis: ppsm ~ 5 independent variable (35m2 < area < 70m2)
+```{r}
+# select only the features of interest for the fist analysis
+sales.3 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
+str(sales.3)
+sales.3 <- dplyr::filter(sales.3, area >=35 & area <= 70)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+split <- caTools::sample.split(sales.3$ppsm, SplitRatio = 0.7) 
+
+# Split up the data using subset
+trainingSet <- subset(sales.3, split==TRUE)
+testingSet <- subset(sales.3, split==FALSE)
+
+# Regression model on training set
+ppsm3.model.glm <- glm(ppsm ~ ., data=trainingSet)
+
+summary(ppsm3.model.glm)
+
+# Prediction on testing set
+predict.gml.ppsm = predict(ppsm3.model.glm, newdata=testingSet)
+
+# Calculate error on testing set
+errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-60:200, n=50))
+
+Fn = ecdf(errTest)
+plot(Fn)
+```
+The model performs better than with the complete data, with a mean error of 3.8%, a standard deviation of 18.7%, residual deviance of 82 and AIC of -1884.
+
+#### Fourth analysis: ppsm ~ 5 independent variable (35m2 < area < 70m2) with LM
+```{r}
+# Regression model on training set
+ppsm4.model.lm <- lm(ppsm ~ ., data=trainingSet)
+
+summary(ppsm4.model.lm)
+
+# Prediction on testing set
+predict.lm.ppsm = predict(ppsm4.model.lm, newdata=testingSet)
+
+# Calculate error on testing set
+errTest = (predict.lm.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-60:200, n=50))
+
+Fn = ecdf(errTest)
+plot(Fn)
+```
+The model performs exactly the same as GLM, but provides an adjusted R-square value instead of AIC metric.
+
+
+
+### Regression tree (CART) with rpart
+Do a regression tree on same data as Second analysis above.
+
+#### Without parameter optimisation
+```{r}
+# show the dataset
+str(sales.2)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
+
+# Split up the data using subset
+trainingSet <- subset(sales.2, split==TRUE)
+testingSet <- subset(sales.2, split==FALSE)
+
+# fit the model on training set
+ppsm.sales2.cart <- rpart(ppsm ~ ., data=trainingSet)
+summary(ppsm.sales2.cart)
+# predict on testing set
+ppsm <- predict(ppsm.sales2.cart, testingSet, type="vector")
+
+# calculate error as performance evaluation metric
+errTest = (ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+summary(errTest)
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-100:500, n=50))
+
+```
+
+#### With parameter optimisation using caret
+```{r}
+# show the dataset
+str(sales.2)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
+
+# Split up the data using subset
+trainingSet <- subset(sales.2, split==TRUE)
+testingSet <- subset(sales.2, split==FALSE)
+
+testingSet <- dplyr::filter(testingSet, area>=30 & area<=70)
+
+# Define cross-validation experiment
+numFolds = caret::trainControl( method = "cv", number = 10 )
+cpGrid = expand.grid( .cp = seq(1e-6,1e-4,1e-6)) 
+
+# Perform the cross validation
+caret::train(ppsm ~ ., data = trainingSet, na.action=na.omit, method = "rpart", trControl = numFolds, tuneGrid = cpGrid )
+
+# Create a new CART model
+ppsm.sales2.cart2 = rpart::rpart(ppsm ~ ., data = trainingSet, cp = 8.1e-05)
+
+prp(ppsm.sales2.cart2)
+
+# Make predictions
+pr.ppsm.cart2 = predict(ppsm.sales2.cart2, newdata = testingSet)
+
+# Calculate error on testing set
+errCART2 = (pr.ppsm.cart2-testingSet$ppsm)/testingSet$ppsm*100
+summary(errCART2)
+
+mean(errCART2, na.rm=TRUE)
+sd(errCART2, na.rm=TRUE) 
+hist(errCART2, breaks = pretty(-60:400, n=500))
+
+```
+
+## Answer some modelling questions
+Is my model performing better for a subset of the data, e.g. in a given district?
+Do I need to scale all my variables before the analysis?
+
+When I look at the GML model summary:
+  - Deviance residual: ??
+  - Coefficients (Estimate): gives the sign and level of correlation. Factors are all compared to a baseline factor! Can I say that a Lift is increases the price by 54'000 HUF/m2 based on the coefficient? Yes, assuming I don't have confounders... This is the debate between predictive models and finding causal relationships.
+  - Null deviance: ??
+  - Residual deviance: ??
+  - AIC = Akaike Information Criterion: ??
+
+Tip to name my models: y.training_data.model, e.g. "price.sales1.glm"
+>> .algorithm.
+
+
+Does it improve the prediction if I train on the complete dataset, but thenpredict on a narrower range of area? With CART, it's not obvious at all.
+
+## Answer real-world questions
+
+
+Some examples of real-world questions: 
+1) Looking at the histogram of errors, whioch properties seem undervalued? 
+2) What features are driving property prices?
+3) What is the premium if there is an elevator? Talk in "ppsm" or "price"?
+```{r}
+boxplot(ppsm~lift, data=sales, outline=F) #outline=F removes the outliers
+median(sales.2$ppsm[sales.2$lift=="van"],na.rm=T)
+median(sales.2$ppsm[sales.2$lift=="nincs"],na.rm=T)
+
+```
+
