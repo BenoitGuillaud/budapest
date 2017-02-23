@@ -7,15 +7,18 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library("dplyr")
-library("corrgram")
+library(dplyr)
+library(corrgram)
 #library("vcd")
-#library("caTools")
-#library("psych")
-library("rpart") # implements CART (regression trees)
-library("rpart.plot")
-library("caret")
-library("ggplot2")
+library(caTools)
+#library("psych)
+library(rpart)          # implements CART (regression trees)
+library(rpart.plot)
+library(caret)
+library(e1071)          # skewness
+library(kernlab)        # support vector machine 
+library(pROC)	          # plot the ROC curves
+library(ggplot2)
 
 ```
 
@@ -205,6 +208,7 @@ summary(sales)
 ```
 
 
+
 ## Explore the data
 ### Summary information
 In this section, we create additional variables with mutate() and then use group_by() and summarise() from the dplyr package to take a first look at the data. In particular, the group_by() function is used to generate summary statistics from the data frame within strata defined by a variable.
@@ -250,17 +254,6 @@ Let's look at the variations with "view":
 ```{r}
 views <- dplyr::group_by(sales, view)
 dplyr::summarise(views,
-                 total.count = n(),
-                 median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
-```
-
-Let's look at the variations with "balcony":
-```{r}
-# group the continuous vcariable with custom bins
-data.frame(dataset, bin=cut(dataset, c(1,4,9,17,23), include.lowest=TRUE))
-
-balconys <- dplyr::group_by(sales, cut(balcony, seq.int(0,max(balcony, na.rm = TRUE), by=5)))
-dplyr::summarise(balconys,
                  total.count = n(),
                  median.ppsm = round(median(ppsm, na.rm=TRUE)*1000, 1))
 ```
@@ -311,13 +304,123 @@ hist(sales$price, n=100)
 hist(sales$ppsm, n=100)
 ```
 
+
 ## Make predictions
+```{r}
+# select the features of interest
+sales.1 <- dplyr::select(sales, price, area, fullrooms, halfrooms, varos, floor, lift, balcony)
+
+# Randomly split the data into training and testing sets (based on the outcome)
+set.seed(101)
+inTrain <- caret::createDataPartition(sales.1$price, p=0.75,list = FALSE)
+training <- sales.1[inTrain,]
+testing <-  sales.1[-inTrain,]
+
+nrow(training)
+nrow(na.exclude(training))
+nrow(testing)
+nrow(na.exclude(testing))
+
+# Randomly split the data into training and testing sets (based on the preductors)
+##
+##
+
+# Set the resampling method and options
+ctrl <- caret::trainControl(## 10-fold CV
+                            method = "repeatedcv",
+                            number = 10,
+                            ## repeated three times
+                            repeats = 3)
+
+lm_fit <- caret::train(price ~ .,
+                       data = na.exclude(training),
+                       method = "lm",
+                       tuneLength = 15,
+                       trControl = ctrl,
+                       preProc = c("BoxCox","center", "scale"))
+
+# model summary                       
+summary(lm_fit) 
+
+# make predictions on testing set
+testing <- na.exclude(testing)
+str(testing)
+
+price_pred_lm <- predict(lm_fit, newdata=testing)
+summary(price_pred_lm)
+
+# performance measure for regression
+postResample(pred = price_pred_lm, obs = na.exclude(testing$price))
+
+             
+             
+# Calculate error on testing set
+errTest = (price_pred_lm - testing$price)/testing$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-500:300, n=50))
+
+Fn = ecdf(errTest)
+plot(Fn)
+```
+
+## Center and scale the predictors for the training
+ ## set and all future samples.
+ preProc = c("center", "scale"))
+
+trainX <-trainSet[,2:length(sales.c1.trans)]        # Pull out the variables for training
+sapply(trainX,summary)           # Look at a summary of the training data
+
+```
+
+
+
+
+
 ### SVM with Caret package
 #### pre-process the data
 ```{r}
 # select the features of interest
-sales.c1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
+sales.1 <- dplyr::select(sales, price, area, fullrooms, halfrooms, varos, floor, storeys, lift, heating, balcony)
+
+# skewness
+e1071::skewness(sales.c1$price, na.rm = T)
+e1071::skewness(sales.c1$area, na.rm = T)
+e1071::skewness(sales.c1$halfrooms,na.rm = TRUE)
+
+# define the transformation to remove skewness, center and scale the predictors
+trans <- caret::preProcess(sales.c1[-1],
+                           method = c("BoxCox", "center", "scale"))
+
+# apply the transformation to the predictors
+sales.c1.trans <- predict(trans, sales.c1[-1])
+head(sales.c1.trans)
+
+# impute missing variables
+
+# filter for near-zero variance predictors
+
+caret::nearZeroVar(sales.c1.trans)
+
+# find correlations
+
+# create dummy variables
+
+# feature engineering
+
 ```
+
+#### Create training and testing sets
+```{r}
+sales.c1.trans <- cbind(price = sales.c1$price, sales.c1.trans)
+str(sales.c1.trans)
+
+```
+
+#### SVM model
+https://www.r-bloggers.com/the-5th-tribe-support-vector-machines-and-caret/
 
 
 
