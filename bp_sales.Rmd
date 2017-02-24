@@ -268,10 +268,10 @@ Let try techniques  on the continuous variables:
 sales.cont <- dplyr::select(sales, price:halfrooms, balcony:ppsm)
 
 # covariances
-cov(sales.cont)
+#cov(sales.cont)
 
 # correlation coefficients [see also "R in Action"]
-cor(sales.cont, y=NULL, use="pairwise.complete.obs", method=c("pearson","kendall","spearman"))
+#cor(sales.cont, y=NULL, use="pairwise.complete.obs", method=c("pearson","kendall","spearman"))
 
 # testing correlations for significance
 cor.test(sales.cont$price,sales.cont$balcony, alternative="two.side", method="pearson")
@@ -306,103 +306,120 @@ hist(sales$ppsm, n=100)
 
 
 ## Make predictions
+
+### Prepare the datasets
 ```{r}
 # select the features of interest
-sales.1 <- dplyr::select(sales, price, area, fullrooms, halfrooms, varos, floor, lift, balcony)
+sales.1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
 
 # Randomly split the data into training and testing sets (based on the outcome)
 set.seed(101)
 inTrain <- caret::createDataPartition(sales.1$price, p=0.75,list = FALSE)
-training <- sales.1[inTrain,]
-testing <-  sales.1[-inTrain,]
+training.1 <- sales.1[inTrain,]
+testing.1 <-  sales.1[-inTrain,]
 
-nrow(training)
-nrow(na.exclude(training))
-nrow(testing)
-nrow(na.exclude(testing))
+# select the features of interest
+sales.2 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
 
-# Randomly split the data into training and testing sets (based on the preductors)
-##
-##
+# Randomly split the data into training and testing sets (based on the outcome)
+set.seed(1001)
+inTrain <- caret::createDataPartition(sales.2$ppsm, p=0.75,list = FALSE)
+training.2 <- sales.2[inTrain,]
+testing.2 <-  sales.2[-inTrain,]
+```
+### Linear Regression (LM)
+#### price ~ 5 independent variables (LM, no transformation)
+```{r}
+# Regression model on training set
+price_mod_lm <- stats::lm(price ~ ., data=training.1)
 
+# Summary statistics
+summary(price_mod_lm)
+
+# Plot residuals vs. observed values
+kernlab::plot(na.exclude(training.1)$price, resid(price_mod_lm)/na.exclude(training.1)$price*100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(na.exclude(training.1)$price,fitted(price_mod_lm))
+
+# Predictions on testing set
+testing.1 <- na.exclude(testing.1)
+str(testing.1)
+
+price_pred_lm <- predict(price_mod_lm, newdata=testing.1)
+
+# Performance measure for regression
+postResample(pred = price_pred_lm, obs = testing.1$price)
+```
+
+#### price ~ 5 independent variables (LM with caret, transform predictors)
+```{r}
 # Set the resampling method and options
-ctrl <- caret::trainControl(## 10-fold CV
+ctrl <- caret::trainControl(## n-fold CV
                             method = "repeatedcv",
                             number = 10,
-                            ## repeated three times
+                            ## repeated k times
                             repeats = 3)
 
-lm_fit <- caret::train(price ~ .,
-                       data = na.exclude(training),
-                       method = "lm",
-                       tuneLength = 15,
-                       trControl = ctrl,
-                       preProc = c("BoxCox","center", "scale"))
+price_mod_lm.A <- caret::train(price ~ .,
+                               data = na.exclude(training.1),
+                               method = "lm",
+                               tuneLength = 15,
+                               trControl = ctrl,
+                               preProc = c("center", "scale"))
 
 # model summary                       
-summary(lm_fit) 
+summary(price_mod_lm.A) 
 
-# make predictions on testing set
-testing <- na.exclude(testing)
-str(testing)
+# Plot residuals vs. observed values
+kernlab::plot(na.exclude(training.1)$price, resid(price_mod_lm.A)/na.exclude(training.1)$price*100)
 
-price_pred_lm <- predict(lm_fit, newdata=testing)
-summary(price_pred_lm)
+# Plot predicted values vs. observed values
+kernlab::plot(na.exclude(training.1)$price,fitted(price_mod_lm.A))
 
-# performance measure for regression
-postResample(pred = price_pred_lm, obs = na.exclude(testing$price))
+# Predictions on testing set
+testing.1 <- na.exclude(testing.1)
+price_pred_lm.A <- predict(price_mod_lm.A, newdata=testing.1)
 
-             
-             
+# Performance measure for regression
+caret::postResample(pred = price_pred_lm.A, obs = testing.1$price)
+
 # Calculate error on testing set
-errTest = (price_pred_lm - testing$price)/testing$price * 100
+errTest = (price_pred_lm.A - testing.1$price)/testing.1$price * 100
 summary(errTest)
 
 mean(errTest, na.rm=TRUE)
 sd(errTest, na.rm=TRUE) 
 hist(errTest, breaks = pretty(-500:300, n=50))
-
-Fn = ecdf(errTest)
-plot(Fn)
 ```
 
-## Center and scale the predictors for the training
- ## set and all future samples.
- preProc = c("center", "scale"))
+Summary:
+  - Centering and scaling don't change anything to the result of lm method
+      Residual standard error = 24.8 and Adjusted R-squared = 0.70 
+      RSME = 23.0 and Rsquared = 0.74 on testing set
+  - "BoxCox" to resolve skewness results in much worse RMSE and Rsquared result
+      Residual standard error = 29.8 and Adjusted R-squared = 0.57 
+      RSME = 28.6 and Rsquared = 0.59 on testing set
+  - CV and repeats don't have any impact on the calcualtion
 
-trainX <-trainSet[,2:length(sales.c1.trans)]        # Pull out the variables for training
-sapply(trainX,summary)           # Look at a summary of the training data
-
-```
-
-
-
-
-
-### SVM with Caret package
-#### pre-process the data
+#### price ~ 5 independent variables (LM with caret, transform outcome and predictors)
+We first pre-process all the variables, i.e. the outcome and predictor(s):
 ```{r}
-# select the features of interest
-sales.1 <- dplyr::select(sales, price, area, fullrooms, halfrooms, varos, floor, storeys, lift, heating, balcony)
-
 # skewness
-e1071::skewness(sales.c1$price, na.rm = T)
-e1071::skewness(sales.c1$area, na.rm = T)
-e1071::skewness(sales.c1$halfrooms,na.rm = TRUE)
+e1071::skewness(sales.1$price, na.rm = T)
+e1071::skewness(sales.1$area, na.rm = T)
 
-# define the transformation to remove skewness, center and scale the predictors
-trans <- caret::preProcess(sales.c1[-1],
+# define the transformation to remove skewness, center and scale
+trans <- caret::preProcess(sales.1,
                            method = c("BoxCox", "center", "scale"))
 
-# apply the transformation to the predictors
-sales.c1.trans <- predict(trans, sales.c1[-1])
-head(sales.c1.trans)
+# apply the transformation
+sales.1.trans <- predict(trans, sales.1)
 
 # impute missing variables
 
 # filter for near-zero variance predictors
-
-caret::nearZeroVar(sales.c1.trans)
+caret::nearZeroVar(sales.1.trans)
 
 # find correlations
 
@@ -412,244 +429,386 @@ caret::nearZeroVar(sales.c1.trans)
 
 ```
 
-#### Create training and testing sets
+We now use CARET with lm method:
 ```{r}
-sales.c1.trans <- cbind(price = sales.c1$price, sales.c1.trans)
-str(sales.c1.trans)
+# training and testing sets
+training.1.trans <- sales.1.trans[inTrain,]
+testing.1.trans <-  sales.1.trans[-inTrain,]
 
-```
+# Set the resampling method and options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "repeatedcv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 3)
 
-#### SVM model
-https://www.r-bloggers.com/the-5th-tribe-support-vector-machines-and-caret/
+price_mod_lm.B <- caret::train(price ~ .,
+                               data = na.exclude(training.1.trans),
+                               method = "lm",
+                               tuneLength = 15,
+                               trControl = ctrl)
 
+# model summary                       
+summary(price_mod_lm.B) 
 
+# Plot residuals vs. observed values
+kernlab::plot(na.exclude(training.1.trans)$price,
+              resid(price_mod_lm.B)/na.exclude(training.1.trans)$price*100)
 
+# Plot predicted values vs. observed values
+kernlab::plot(na.exclude(training.1.trans)$price,fitted(price_mod_lm.B))
 
-### Linear regression with GLM and LM
-In this section, we run a linear regression on the dataset using the Generalized Linear Model implementation in R.
-#### First analysis: price ~ 5 independent variables
-```{r}
-# select only the features of interest for the fist analysis
-sales.1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
+# Predictions on testing set
+testing.1.trans <- na.exclude(testing.1)
+price_pred_lm.B <- predict(price_mod_lm.B, newdata=testing.1.trans)
 
-# Randomly split the data into training and testing sets
-set.seed(101)
-split <- caTools::sample.split(sales.1$price, SplitRatio = 0.7) 
-
-# Split up the data using subset
-trainingSet <- subset(sales.1, split==TRUE)
-testingSet <- subset(sales.1, split==FALSE)
-
-# Regression model on training set
-price.model.glm = glm(price ~ ., data=trainingSet)
-
-summary(price.model.glm)
-
-# Prediction on testing set
-predict.gml.price = predict(price.model.glm, newdata=testingSet)
+# Performance measure for regression
+caret::postResample(pred = price_pred_lm.B, obs = testing.1.trans$price)
 
 # Calculate error on testing set
-errTest = (predict.gml.price - testingSet$price)/testingSet$price * 100
+errTest = (price_pred_lm.B - testing.1.trans$price)/testing.1.trans$price * 100
 summary(errTest)
 
 mean(errTest, na.rm=TRUE)
 sd(errTest, na.rm=TRUE) 
 hist(errTest, breaks = pretty(-500:300, n=50))
-
-Fn = ecdf(errTest)
-plot(Fn)
 ```
-The model performs poorly, with a mean error of 3.6%, a standard deviation of 42.8%, residual deviance of 14'196'708 and AIC of 58'187.
+Summary:
+  - Centering and scaling of both outcome and predictor variables:
+       - Residual standard error = 0.50 and Adjusted R-squared = 0.72 
+       - RSME = 28.1 and Rsquared = 0.64 on testing set increase (worse)
+       - err_mean = 34.9 and err_sd = 45.9
+  - BoxCox transformation tend to improve the statistics:
+       - Residual standard error = 0.36 and Adjusted R-squared = 0.86: model stats are better 
+       - RSME = 27.6 and Rsquared = 0.64 on testing set are slightly better
+       - err_mean = 11.4 and err_sd = 35.8
+       
 
-#### Second analysis: ppsm ~ 5 independent variables
+
+
+
+
+
+#### ppsm ~ 5 independent variables (LM with caret, transform predictors)
+The lessons learnt from the previous analyses:
+  - Use CARET package
+  - Center and scale the data (did not change anything, but seems like good practice)
+  - Do not resolve skewness with BoxCox transformation
+  - Transform only the predictor variable(s)
+  
 ```{r}
-# select only the features of interest for the fist analysis
-sales.2 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
+# Set the resampling method and options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "repeatedcv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 3)
 
-# Randomly split the data into training and testing sets
-set.seed(101)
-split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
+ppsm_mod_lm.A <- caret::train(ppsm ~ .,
+                               data = na.exclude(training.2),
+                               method = "lm",
+                               tuneLength = 15,
+                               trControl = ctrl,
+                               preProc = c("center", "scale"))
 
-# Split up the data using subset
-trainingSet <- subset(sales.2, split==TRUE)
-testingSet <- subset(sales.2, split==FALSE)
+# model summary                       
+summary(ppsm_mod_lm.A) 
 
-# Regression model on training set
-ppsm.model.glm <- glm(ppsm ~ ., data=trainingSet)
+# Plot residuals vs. observed values
+kernlab::plot(na.exclude(training.2)$ppsm, resid(ppsm_mod_lm.A)/na.exclude(training.2)$ppsm*100)
 
-summary(ppsm.model.glm)
+# Plot predicted values vs. observed values
+kernlab::plot(na.exclude(training.2)$ppsm,fitted(ppsm_mod_lm.A))
 
-# Prediction on testing set
-predict.gml.ppsm = predict(ppsm.model.glm, newdata=testingSet)
+# Predictions on testing set
+testing.2 <- na.exclude(testing.2)
+ppsm_pred_lm.A <- predict(ppsm_mod_lm.A, newdata=testing.2)
+
+# Performance measure for regression
+caret::postResample(pred = ppsm_pred_lm.A, obs = testing.2$ppsm)
 
 # Calculate error on testing set
-errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
+errTest = (ppsm_pred_lm.A - testing.2$ppsm)/testing.2$ppsm * 100
 summary(errTest)
 
 mean(errTest, na.rm=TRUE)
 sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-60:200, n=50))
-
-Fn = ecdf(errTest)
-plot(Fn)
+hist(errTest, breaks = pretty(-500:300, n=50))
 ```
-The model performs better than with price, with a mean error of 5.6%, a standard deviation of 25.0%, residual deviance of 330 and AIC of -1030.
+Summary:
+  - Residual standard error = 0.21 and Adjusted R-squared = 0.39 
+  - RSME = 0.18 and Rsquared = 0.39 on testing set
 
-It is interesting to note that the residual deviance and AIC are terrible if ppsm is defined as price/area * 1000. Do I need to scale all my variables?
+The standard deviation of the error is "only" 25%, but the mean(errTest) is huge with 5.8. Using ppsm instead of price degrades the prediciton
 
-
-Now, let reduce the testing set to 30m2 < area < 100m2 and plot again the histogram, to see how well the model is performing in this range.
+### Regression tree (CART with rpart)
+The analysis below is with parameter optimisation using caret
 ```{r}
-# filter the testing set
-testingSet <- dplyr::filter(testingSet, area >=30 & area <= 100)
+# Set the resampling method and cross-validation options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "cv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 0)
 
-# Prediction on testing set
-predict.gml.ppsm = predict(ppsm.model.glm, newdata=testingSet)
-
-# Calculate error on testing set
-errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
-summary(errTest)
-
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-60:200, n=50))
-```
-Predictions in the region 30m2 < area < 100m2 are not much better. A neat way to look at the result would be have bins for area, and show for each bin the mean error and its standard deviation.
-
-
-#### Third analysis: ppsm ~ 5 independent variable (35m2 < area < 70m2)
-```{r}
-# select only the features of interest for the fist analysis
-sales.3 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
-str(sales.3)
-sales.3 <- dplyr::filter(sales.3, area >=35 & area <= 70)
-
-# Randomly split the data into training and testing sets
-set.seed(101)
-split <- caTools::sample.split(sales.3$ppsm, SplitRatio = 0.7) 
-
-# Split up the data using subset
-trainingSet <- subset(sales.3, split==TRUE)
-testingSet <- subset(sales.3, split==FALSE)
-
-# Regression model on training set
-ppsm3.model.glm <- glm(ppsm ~ ., data=trainingSet)
-
-summary(ppsm3.model.glm)
-
-# Prediction on testing set
-predict.gml.ppsm = predict(ppsm3.model.glm, newdata=testingSet)
-
-# Calculate error on testing set
-errTest = (predict.gml.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
-summary(errTest)
-
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-60:200, n=50))
-
-Fn = ecdf(errTest)
-plot(Fn)
-```
-The model performs better than with the complete data, with a mean error of 3.8%, a standard deviation of 18.7%, residual deviance of 82 and AIC of -1884.
-
-#### Fourth analysis: ppsm ~ 5 independent variable (35m2 < area < 70m2) with LM
-```{r}
-# Regression model on training set
-ppsm4.model.lm <- lm(ppsm ~ ., data=trainingSet)
-
-summary(ppsm4.model.lm)
-
-# Prediction on testing set
-predict.lm.ppsm = predict(ppsm4.model.lm, newdata=testingSet)
-
-# Calculate error on testing set
-errTest = (predict.lm.ppsm - testingSet$ppsm)/testingSet$ppsm * 100
-summary(errTest)
-
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-60:200, n=50))
-
-Fn = ecdf(errTest)
-plot(Fn)
-```
-The model performs exactly the same as GLM, but provides an adjusted R-square value instead of AIC metric.
-
-
-
-### Regression tree (CART) with rpart
-Do a regression tree on same data as Second analysis above.
-
-#### Without parameter optimisation
-```{r}
-# show the dataset
-str(sales.2)
-
-# Randomly split the data into training and testing sets
-set.seed(101)
-split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
-
-# Split up the data using subset
-trainingSet <- subset(sales.2, split==TRUE)
-testingSet <- subset(sales.2, split==FALSE)
-
-# fit the model on training set
-ppsm.sales2.cart <- rpart(ppsm ~ ., data=trainingSet)
-summary(ppsm.sales2.cart)
-# predict on testing set
-ppsm <- predict(ppsm.sales2.cart, testingSet, type="vector")
-
-# calculate error as performance evaluation metric
-errTest = (ppsm - testingSet$ppsm)/testingSet$ppsm * 100
-summary(errTest)
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-100:500, n=50))
-
-```
-
-#### With parameter optimisation using caret
-```{r}
-# show the dataset
-str(sales.2)
-
-# Randomly split the data into training and testing sets
-set.seed(101)
-split <- caTools::sample.split(sales.2$ppsm, SplitRatio = 0.7) 
-
-# Split up the data using subset
-trainingSet <- subset(sales.2, split==TRUE)
-testingSet <- subset(sales.2, split==FALSE)
-
-testingSet <- dplyr::filter(testingSet, area>=30 & area<=70)
-
-# Define cross-validation experiment
-numFolds = caret::trainControl( method = "cv", number = 10 )
-cpGrid = expand.grid( .cp = seq(1e-6,1e-4,1e-6)) 
+cpGrid = expand.grid( .cp = seq(1e-7,1e-6,1e-7)) 
 
 # Perform the cross validation
-caret::train(ppsm ~ ., data = trainingSet, na.action=na.omit, method = "rpart", trControl = numFolds, tuneGrid = cpGrid )
+price_cv_rpart <- caret::train(price ~ .,
+                               data = training.1,
+                               na.action = na.omit,
+                               method = "rpart",
+                               trControl = ctrl,
+                               tuneGrid = cpGrid,
+                               preProc = c("center", "scale"))
 
-# Create a new CART model
-ppsm.sales2.cart2 = rpart::rpart(ppsm ~ ., data = trainingSet, cp = 8.1e-05)
+# Cross-validation results
+print(price_cv_rpart)
+plot(price_cv_rpart)
 
-prp(ppsm.sales2.cart2)
+# Create a CART model
+price_mod_rpart <- rpart::rpart(price ~ ., data = training.1, cp = 9e-07)
 
 # Make predictions
-pr.ppsm.cart2 = predict(ppsm.sales2.cart2, newdata = testingSet)
+price_pred_rpart = predict(price_mod_rpart, newdata = testing.1)
+
+# model summary                       
+
+# Plot residuals vs. observed values
+obs <- training.1$price
+fit <- predict(price_mod_rpart)
+kernlab::plot(obs, (fit-obs)/obs *100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(obs,fit)
+
+# Predictions on testing set
+price_pred_rpart <- predict(price_mod_rpart, newdata=testing.1)
+
+# Performance measure for regression
+caret::postResample(pred = price_pred_rpart, obs = testing.1$price)
 
 # Calculate error on testing set
-errCART2 = (pr.ppsm.cart2-testingSet$ppsm)/testingSet$ppsm*100
-summary(errCART2)
+errTest = (price_pred_rpart - testing.1$price)/testing.1$price * 100
+summary(errTest)
 
-mean(errCART2, na.rm=TRUE)
-sd(errCART2, na.rm=TRUE) 
-hist(errCART2, breaks = pretty(-60:400, n=500))
-
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-160:160, n=50))
 ```
 
+### Random forest
+The analysis below is with parameter optimisation using caret. The parameters to optimize with resampling are "mtry" and "ntree".
+
+```{r}
+# Set the resampling method and cross-validation options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "cv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 3)
+
+# Set constant model parameter
+ntree <- 1000
+
+# Perform the cross validation
+set.seed(7)
+mtryGrid <- expand.grid(.mtry=c(1:5))
+price_cv_rf <- train(price ~ ., 
+                      data=training.1, 
+                      na.action = na.omit,
+                      method="rf", 
+                      metric="RMSE", 
+                      tuneGrid=mtryGrid, 
+                      trControl=ctrl)
+print(price_train_rf)
+plot(price_train_rf)
+
+# Create a random forest model
+price_mod_rf <- randomForest::randomForest(price ~ ., 
+                                              data = training.1,
+                                              na.action = na.omit,
+                                              importance = TRUE,
+                                              ntree = 1000,
+                                              mtry = 5)
+
+# Variables of importance
+varImpPlot(price_mod_rf)
+
+# Plot residuals vs. observed values
+obs <- na.exclude(training.1)$price
+fit <- predict(price_mod_rf)
+kernlab::plot(obs, (fit-obs)/obs *100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(obs,fit)
+
+# Make predictions on testing set
+price_pred_rf = predict(price_mod_rf, newdata = testing.1)
+
+# Performance measure for regression
+caret::postResample(pred = price_pred_rf, obs = testing.1$price)
+
+# Calculate error on testing set
+errTest = (price_pred_rf - testing.1$price)/testing.1$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-160:160, n=50))
+```
+
+
+### Prepare the datasets with dummy variables
+```{r}
+# Dummify all the (factor) variables in the dataset with "~ ." with fullRank = T for LM
+dmy <- dummyVars("~ .", data = sales.1, fullRank = T)
+sales.10 <- data.frame(predict(dmy, newdata = sales.1))
+
+# Randomly split the data into training and testing sets (based on the outcome)
+set.seed(101)
+inTrain <- caret::createDataPartition(sales.10$price, p=0.75,list = FALSE)
+training.10 <- sales.10[inTrain,]
+testing.10 <-  sales.10[-inTrain,]
+
+
+# Dummify all the (factor) variables in the dataset with "~ ." with fullRank = F for CART
+dmy <- dummyVars("~ .", data = sales.1, fullRank = F)
+sales.11 <- data.frame(predict(dmy, newdata = sales.1))
+
+# Randomly split the data into training and testing sets (based on the outcome)
+set.seed(101)
+inTrain <- caret::createDataPartition(sales.11$price, p=0.75,list = FALSE)
+training.11 <- sales.11[inTrain,]
+testing.11 <-  sales.11[-inTrain,]
+```
+
+#### price ~ 5 independent variables (LM with caret, transform predictors)
+```{r}
+# Set the resampling method and options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "repeatedcv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 3)
+
+price_mod_lm.A.dum <- caret::train(price ~ .,
+                               data = na.exclude(training.10),
+                               method = "lm",
+                               tuneLength = 15,
+                               trControl = ctrl,
+                               preProc = c("center", "scale"))
+
+# model summary                       
+summary(price_mod_lm.A.dum) 
+
+# Plot residuals vs. observed values
+kernlab::plot(na.exclude(training.10)$price, resid(price_mod_lm.A.dum)/na.exclude(training.10)$price*100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(na.exclude(training.10)$price,fitted(price_mod_lm.A.dum))
+
+# Predictions on testing set
+testing.10 <- na.exclude(testing.10)
+price_pred_lm.A.dum <- predict(price_mod_lm.A.dum, newdata=testing.10)
+
+# Performance measure for regression
+caret::postResample(pred = price_pred_lm.A.dum, obs = testing.10$price)
+
+# Calculate error on testing set
+errTest = (price_pred_lm.A.dum - testing.10$price)/testing.10$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-500:300, n=50))
+```
+Summary:
+  - Dummifying the factor variables has no effect on the linear regression
+
+### Regression tree (CART with rpart)
+The analysis below is with parameter optimisation using caret
+```{r}
+# Set the resampling method and cross-validation options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "cv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 0)
+
+cpGrid = expand.grid( .cp = seq(1e-8,1e-6,1e-8)) 
+
+# Perform the cross validation
+price_cv_rpart.dum <- caret::train(price ~ .,
+                               data = training.11,
+                               na.action = na.omit,
+                               method = "rpart",
+                               trControl = ctrl,
+                               tuneGrid = cpGrid,
+                               preProc = c("center", "scale"))
+
+# Cross-validation results
+print(price_cv_rpart.dum)
+plot(price_cv_rpart.dum)
+
+# Create a CART model
+price_mod_rpart.dum <- rpart::rpart(price ~ ., data = training.11, cp = 5.7e-07)
+
+# Make predictions
+price_pred_rpart.dum = predict(price_mod_rpart.dum, newdata = testing.11)
+
+# model summary                       
+
+# Plot residuals vs. observed values
+obs <- training.11$price
+fit <- predict(price_mod_rpart.dum)
+kernlab::plot(obs, (fit-obs)/obs *100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(obs,fit)
+
+# Predictions on testing set
+price_pred_rpart.dum <- predict(price_mod_rpart.dum, newdata=testing.11)
+
+# Performance measure for regression
+caret::postResample(pred = price_pred_rpart.dum, obs = testing.11$price)
+
+# Calculate error on testing set
+errTest = (price_pred_rpart.dum - testing.11$price)/testing.11$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-160:160, n=50))
+```
+Summary:
+  - the use of dummy variables makes the RSME and Rsquared worse!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## Answer some modelling questions
+
+### Randomly split the data into training and testing sets (based on the predictors)
+
+### Filter with dplyr
+testingSet <- dplyr::filter(testingSet, area >=30 & area <= 100)
+
+
 Is my model performing better for a subset of the data, e.g. in a given district?
 Do I need to scale all my variables before the analysis?
 
