@@ -306,7 +306,6 @@ hist(sales$ppsm, n=100)
 
 
 ## Make predictions
-
 ### Prepare the datasets
 ```{r}
 # select the features of interest
@@ -317,42 +316,10 @@ set.seed(101)
 inTrain <- caret::createDataPartition(sales.1$price, p=0.75,list = FALSE)
 training.1 <- sales.1[inTrain,]
 testing.1 <-  sales.1[-inTrain,]
-
-# select the features of interest
-sales.2 <- dplyr::select(sales, ppsm, area, varos, floor, lift, heating)
-
-# Randomly split the data into training and testing sets (based on the outcome)
-set.seed(1001)
-inTrain <- caret::createDataPartition(sales.2$ppsm, p=0.75,list = FALSE)
-training.2 <- sales.2[inTrain,]
-testing.2 <-  sales.2[-inTrain,]
-```
-### Linear Regression (LM)
-#### price ~ 5 independent variables (LM, no transformation)
-```{r}
-# Regression model on training set
-price_mod_lm <- stats::lm(price ~ ., data=training.1)
-
-# Summary statistics
-summary(price_mod_lm)
-
-# Plot residuals vs. observed values
-kernlab::plot(na.exclude(training.1)$price, resid(price_mod_lm)/na.exclude(training.1)$price*100)
-
-# Plot predicted values vs. observed values
-kernlab::plot(na.exclude(training.1)$price,fitted(price_mod_lm))
-
-# Predictions on testing set
-testing.1 <- na.exclude(testing.1)
-str(testing.1)
-
-price_pred_lm <- predict(price_mod_lm, newdata=testing.1)
-
-# Performance measure for regression
-postResample(pred = price_pred_lm, obs = testing.1$price)
 ```
 
-#### price ~ 5 independent variables (LM with caret, transform predictors)
+### Linear regression
+Use caret with LM. Transform predictors only.
 ```{r}
 # Set the resampling method and options
 ctrl <- caret::trainControl(## n-fold CV
@@ -393,41 +360,7 @@ sd(errTest, na.rm=TRUE)
 hist(errTest, breaks = pretty(-500:300, n=50))
 ```
 
-Summary:
-  - Centering and scaling don't change anything to the result of lm method
-      Residual standard error = 24.8 and Adjusted R-squared = 0.70 
-      RSME = 23.0 and Rsquared = 0.74 on testing set
-  - "BoxCox" to resolve skewness results in much worse RMSE and Rsquared result
-      Residual standard error = 29.8 and Adjusted R-squared = 0.57 
-      RSME = 28.6 and Rsquared = 0.59 on testing set
-  - CV and repeats don't have any impact on the calcualtion
 
-#### price ~ 5 independent variables (LM with caret, transform outcome and predictors)
-We first pre-process all the variables, i.e. the outcome and predictor(s):
-```{r}
-# skewness
-e1071::skewness(sales.1$price, na.rm = T)
-e1071::skewness(sales.1$area, na.rm = T)
-
-# define the transformation to remove skewness, center and scale
-trans <- caret::preProcess(sales.1,
-                           method = c("BoxCox", "center", "scale"))
-
-# apply the transformation
-sales.1.trans <- predict(trans, sales.1)
-
-# impute missing variables
-
-# filter for near-zero variance predictors
-caret::nearZeroVar(sales.1.trans)
-
-# find correlations
-
-# create dummy variables
-
-# feature engineering
-
-```
 
 We now use CARET with lm method:
 ```{r}
@@ -489,57 +422,6 @@ Summary:
 
 
 
-#### ppsm ~ 5 independent variables (LM with caret, transform predictors)
-The lessons learnt from the previous analyses:
-  - Use CARET package
-  - Center and scale the data (did not change anything, but seems like good practice)
-  - Do not resolve skewness with BoxCox transformation
-  - Transform only the predictor variable(s)
-  
-```{r}
-# Set the resampling method and options
-ctrl <- caret::trainControl(## n-fold CV
-                            method = "repeatedcv",
-                            number = 10,
-                            ## repeated k times
-                            repeats = 3)
-
-ppsm_mod_lm.A <- caret::train(ppsm ~ .,
-                               data = na.exclude(training.2),
-                               method = "lm",
-                               tuneLength = 15,
-                               trControl = ctrl,
-                               preProc = c("center", "scale"))
-
-# model summary                       
-summary(ppsm_mod_lm.A) 
-
-# Plot residuals vs. observed values
-kernlab::plot(na.exclude(training.2)$ppsm, resid(ppsm_mod_lm.A)/na.exclude(training.2)$ppsm*100)
-
-# Plot predicted values vs. observed values
-kernlab::plot(na.exclude(training.2)$ppsm,fitted(ppsm_mod_lm.A))
-
-# Predictions on testing set
-testing.2 <- na.exclude(testing.2)
-ppsm_pred_lm.A <- predict(ppsm_mod_lm.A, newdata=testing.2)
-
-# Performance measure for regression
-caret::postResample(pred = ppsm_pred_lm.A, obs = testing.2$ppsm)
-
-# Calculate error on testing set
-errTest = (ppsm_pred_lm.A - testing.2$ppsm)/testing.2$ppsm * 100
-summary(errTest)
-
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-500:300, n=50))
-```
-Summary:
-  - Residual standard error = 0.21 and Adjusted R-squared = 0.39 
-  - RSME = 0.18 and Rsquared = 0.39 on testing set
-
-The standard deviation of the error is "only" 25%, but the mean(errTest) is huge with 5.8. Using ppsm instead of price degrades the prediciton
 
 ### Regression tree (CART with rpart)
 The analysis below is with parameter optimisation using caret
@@ -671,6 +553,8 @@ hist(errTest, breaks = pretty(-160:160, n=50))
 
 
 
+
+
 ## Answer some modelling questions
 
 ### Randomly split the data into training and testing sets (based on the predictors)
@@ -695,6 +579,32 @@ Tip to name my models: y.training_data.model, e.g. "price.sales1.glm"
 
 Does it improve the prediction if I train on the complete dataset, but thenpredict on a narrower range of area? With CART, it's not obvious at all.
 
+#### price ~ 5 independent variables (LM with caret, transform outcome and predictors)
+We first pre-process all the variables, i.e. the outcome and predictor(s):
+```{r}
+# skewness
+e1071::skewness(sales.1$price, na.rm = T)
+e1071::skewness(sales.1$area, na.rm = T)
+
+# define the transformation to remove skewness, center and scale
+trans <- caret::preProcess(sales.1,
+                           method = c("BoxCox", "center", "scale"))
+
+# apply the transformation
+sales.1.trans <- predict(trans, sales.1)
+
+# impute missing variables
+
+# filter for near-zero variance predictors
+caret::nearZeroVar(sales.1.trans)
+
+# find correlations
+
+# create dummy variables
+
+# feature engineering
+
+```
 ## Answer real-world questions
 
 
