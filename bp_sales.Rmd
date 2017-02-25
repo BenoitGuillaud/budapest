@@ -208,7 +208,6 @@ summary(sales)
 ```
 
 
-
 ## Explore the data
 ### Summary information
 In this section, we create additional variables with mutate() and then use group_by() and summarise() from the dplyr package to take a first look at the data. In particular, the group_by() function is used to generate summary statistics from the data frame within strata defined by a variable.
@@ -309,14 +308,124 @@ hist(sales$ppsm, n=100)
 ### Prepare the datasets
 ```{r}
 # select the features of interest
-sales.1 <- dplyr::select(sales, price, area, varos, floor, lift, heating)
+sales.1 <- dplyr::select(sales, price, area, fullrooms, halfrooms, varos, condition, floor, lift, heating, view, lat, long, balcony, utility)
 
-# Randomly split the data into training and testing sets (based on the outcome)
+# Near-zero variables
+nzv <- nearZeroVar(sales.1, saveMetrics= TRUE)
+print(nzv)
+
+# Impute missing data to the training set
+summary(sales.1$balcony)
+sales.1$balcony <- ifelse(is.na(sales.1$balcony), 0, sales.1$balcony)
+
+# Randomly split the data into training and testing sets
 set.seed(101)
-inTrain <- caret::createDataPartition(sales.1$price, p=0.75,list = FALSE)
+  ## based on outcome
+  inTrain <- caret::createDataPartition(sales.1$price, p=0.75,list = FALSE)
+  ## based on predictors
+  # index <- maxDissim()
 training.1 <- sales.1[inTrain,]
 testing.1 <-  sales.1[-inTrain,]
+
+NROW(na.exclude(training.1))
+NROW(na.exclude(testing.1))
+
 ```
+### Baseline model: price ~ varos + area
+#### Simple lookup
+The baseline model is a simple one: the average or median price per square meter in each "varos".
+```{r}
+# select the features of interest
+sales.0 <- dplyr::select(sales, price, ppsm, area, varos)
+sales.0 <- dplyr::filter(sales.0, area >=30 & area <= 100)
+sales.0 <- dplyr::filter(sales.0, price <= 100)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+  ## based on outcome
+  inTrain <- caret::createDataPartition(sales.0$price, p=0.75,list = FALSE)
+  ## based on predictors
+  # index <- maxDissim()
+training.0 <- na.exclude(sales.0[inTrain,])
+testing.0 <-  na.exclude(sales.0[-inTrain,])
+
+NROW(training.0)
+NROW(testing.0)
+
+# create a separate data frame that splits the original data frame by district/varos
+vaross <- dplyr::group_by(training.0, varos)
+
+# build model on training set (mean and median)
+bl <- dplyr::summarise(vaross, 
+                 total.count = n(),
+                 avg.ppsm = mean(ppsm, na.rm=TRUE)*1000,
+                 median.ppsm = median(ppsm, na.rm=TRUE)*1000)
+print(bl)
+
+# use a joint to mimic a VLOOKUP function and make predictions on testing set
+testing.0 <- inner_join(testing.0, bl, by=c("varos"))
+testing.0 <- dplyr::mutate(testing.0, price.pred = median.ppsm * area /1000)
+
+# pred and obs for the testing set
+pred.test <- testing.0$price.pred
+obs.test <- testing.0$price
+
+# Plot residuals vs. observed values
+kernlab::plot(obs.test, (pred.test-obs.test) / obs.test*100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(obs.test,pred.test)
+
+# Performance measure for regression
+caret::postResample(pred = pred.test , obs = obs.test)
+
+# Calculate error on testing set
+testing.0 <- dplyr::mutate(testing.0, error = price.pred - price)
+errTest <- testing.0$error/testing.0$price*100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-300:300, n=100))
+```
+
+
+#### Linear regression
+```{r}
+price_mod_lm.bl <- caret::train(price ~ area + varos,
+                               data = training.0,
+                               na.action = na.omit,
+                               method = "lm",
+                               tuneLength = 15)
+
+# model summary                       
+summary(price_mod_lm.bl) 
+
+# Predictions on testing set
+price_pred_lm.bl <- predict(price_mod_lm.bl, newdata=testing.0)
+
+# pred and obs for the testing set
+pred.test <- price_pred_lm.bl
+obs.test <- testing.0$price
+
+# Plot residuals vs. observed values
+kernlab::plot(obs.test, (pred.test-obs.test) / obs.test*100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(obs.test,pred.test)
+
+# Performance measure for regression
+caret::postResample(pred = pred.test , obs = obs.test)
+
+# Calculate error on testing set
+errTest = (pred.test - obs.test)/obs.test * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-300:300, n=100))
+```
+
 
 ### Linear regression
 Use caret with LM. Transform predictors only.
@@ -329,7 +438,8 @@ ctrl <- caret::trainControl(## n-fold CV
                             repeats = 3)
 
 price_mod_lm.A <- caret::train(price ~ .,
-                               data = na.exclude(training.1),
+                               data = training.1,
+                               na.action = na.omit,
                                method = "lm",
                                tuneLength = 15,
                                trControl = ctrl,
@@ -346,6 +456,7 @@ kernlab::plot(na.exclude(training.1)$price,fitted(price_mod_lm.A))
 
 # Predictions on testing set
 testing.1 <- na.exclude(testing.1)
+nrow(testing.1)
 price_pred_lm.A <- predict(price_mod_lm.A, newdata=testing.1)
 
 # Performance measure for regression
@@ -353,53 +464,6 @@ caret::postResample(pred = price_pred_lm.A, obs = testing.1$price)
 
 # Calculate error on testing set
 errTest = (price_pred_lm.A - testing.1$price)/testing.1$price * 100
-summary(errTest)
-
-mean(errTest, na.rm=TRUE)
-sd(errTest, na.rm=TRUE) 
-hist(errTest, breaks = pretty(-500:300, n=50))
-```
-
-
-
-We now use CARET with lm method:
-```{r}
-# training and testing sets
-training.1.trans <- sales.1.trans[inTrain,]
-testing.1.trans <-  sales.1.trans[-inTrain,]
-
-# Set the resampling method and options
-ctrl <- caret::trainControl(## n-fold CV
-                            method = "repeatedcv",
-                            number = 10,
-                            ## repeated k times
-                            repeats = 3)
-
-price_mod_lm.B <- caret::train(price ~ .,
-                               data = na.exclude(training.1.trans),
-                               method = "lm",
-                               tuneLength = 15,
-                               trControl = ctrl)
-
-# model summary                       
-summary(price_mod_lm.B) 
-
-# Plot residuals vs. observed values
-kernlab::plot(na.exclude(training.1.trans)$price,
-              resid(price_mod_lm.B)/na.exclude(training.1.trans)$price*100)
-
-# Plot predicted values vs. observed values
-kernlab::plot(na.exclude(training.1.trans)$price,fitted(price_mod_lm.B))
-
-# Predictions on testing set
-testing.1.trans <- na.exclude(testing.1)
-price_pred_lm.B <- predict(price_mod_lm.B, newdata=testing.1.trans)
-
-# Performance measure for regression
-caret::postResample(pred = price_pred_lm.B, obs = testing.1.trans$price)
-
-# Calculate error on testing set
-errTest = (price_pred_lm.B - testing.1.trans$price)/testing.1.trans$price * 100
 summary(errTest)
 
 mean(errTest, na.rm=TRUE)
@@ -418,11 +482,6 @@ Summary:
        
 
 
-
-
-
-
-
 ### Regression tree (CART with rpart)
 The analysis below is with parameter optimisation using caret
 ```{r}
@@ -433,7 +492,7 @@ ctrl <- caret::trainControl(## n-fold CV
                             ## repeated k times
                             repeats = 0)
 
-cpGrid = expand.grid( .cp = seq(1e-7,1e-6,1e-7)) 
+cpGrid = expand.grid( .cp = seq(1e-10,1e-1,1e-1)) 
 
 # Perform the cross validation
 price_cv_rpart <- caret::train(price ~ .,
@@ -449,7 +508,7 @@ print(price_cv_rpart)
 plot(price_cv_rpart)
 
 # Create a CART model
-price_mod_rpart <- rpart::rpart(price ~ ., data = training.1, cp = 9e-07)
+price_mod_rpart <- rpart::rpart(price ~ ., data = training.1, cp = 1e-10)
 
 # Make predictions
 price_pred_rpart = predict(price_mod_rpart, newdata = testing.1)
@@ -491,11 +550,11 @@ ctrl <- caret::trainControl(## n-fold CV
                             repeats = 3)
 
 # Set constant model parameter
-ntree <- 1000
+ntree <- 500
 
 # Perform the cross validation
 set.seed(7)
-mtryGrid <- expand.grid(.mtry=c(1:5))
+mtryGrid <- expand.grid(.mtry=c(1:12))
 price_cv_rf <- train(price ~ ., 
                       data=training.1, 
                       na.action = na.omit,
@@ -503,8 +562,8 @@ price_cv_rf <- train(price ~ .,
                       metric="RMSE", 
                       tuneGrid=mtryGrid, 
                       trControl=ctrl)
-print(price_train_rf)
-plot(price_train_rf)
+print(price_cv_rf)
+plot(price_cv_rf)
 
 # Create a random forest model
 price_mod_rf <- randomForest::randomForest(price ~ ., 
@@ -512,7 +571,7 @@ price_mod_rf <- randomForest::randomForest(price ~ .,
                                               na.action = na.omit,
                                               importance = TRUE,
                                               ntree = 1000,
-                                              mtry = 5)
+                                              mtry = 12)
 
 # Variables of importance
 varImpPlot(price_mod_rf)
@@ -541,6 +600,76 @@ hist(errTest, breaks = pretty(-160:160, n=50))
 ```
 
 
+## Model for simple AirBnB optimisation
+For comparison with AirBnB data, let's look at the variations per location then size:
+```{r}
+
+table(sales$fullrooms)
+
+# create a separate data frame that splits the original data frame by district/varos
+airBnB <- dplyr::group_by(sales, district, fullrooms)
+
+dplyr::summarise(airBnB, 
+                 total.count = n(),
+                 avg.price = round(mean(price, na.rm=TRUE), 1),                 
+                 median.price = round(median(price, na.rm=TRUE), 1),
+                 sd.price = round(sd(price, na.rm=TRUE), 1))
+```
+
+Use caret with LM. Transform predictors only.
+```{r}
+# prepare the dataset
+sales.20 <- dplyr::select(sales, price, area, fullrooms, halfrooms, district, varos, condition, floor, lift, heating, view, lat, long, balcony, utility)
+
+# Randomly split the data into training and testing sets
+set.seed(101)
+  ## based on outcome
+  inTrain <- caret::createDataPartition(sales.20$price, p=0.75,list = FALSE)
+  ## based on predictors
+  # index <- maxDissim()
+training.20 <- sales.20[inTrain,]
+testing.20 <-  sales.20[-inTrain,]
+
+# Set the resampling method and options
+ctrl <- caret::trainControl(## n-fold CV
+                            method = "repeatedcv",
+                            number = 10,
+                            ## repeated k times
+                            repeats = 3)
+
+price_mod_lm.airBnB <- caret::train(price ~  district + fullrooms,
+                               data = training.20,
+                               na.action = na.omit,
+                               method = "lm",
+                               tuneLength = 15,
+                               trControl = ctrl,
+                               preProc = c("center", "scale"))
+
+# model summary                       
+summary(price_mod_lm.airBnB) 
+
+# Plot residuals vs. observed values
+kernlab::plot(training.20$price, resid(price_mod_lm.airBnB) / training.20$price*100)
+
+# Plot predicted values vs. observed values
+kernlab::plot(training.20$price,fitted(price_mod_lm.airBnB))
+
+# Predictions on testing set
+testing.20 <- na.exclude(testing.20)
+nrow(testing.20)
+price_pred_lm.airBnB <- predict(price_mod_lm.airBnB, newdata=testing.20)
+
+# Performance measure for regression
+caret::postResample(pred = price_pred_lm.airBnB, obs = testing.20$price)
+
+# Calculate error on testing set
+errTest = (price_pred_lm.airBnB - testing.20$price)/testing.20$price * 100
+summary(errTest)
+
+mean(errTest, na.rm=TRUE)
+sd(errTest, na.rm=TRUE) 
+hist(errTest, breaks = pretty(-500:300, n=50))
+```
 
 
 
